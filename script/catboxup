@@ -1,0 +1,60 @@
+#!/bin/bash
+
+CATBOX_API="https://catbox.moe/user/api.php"
+LTRBOX_API="https://litterbox.catbox.moe/resources/internals/api.php"
+
+SERVER="$CATBOX_API"
+URL_REGEX='(https?|ftp|file)://[-[:alnum:]\+&@#/%?=~_|!:,.;]*[-[:alnum:]\+&@#/%=~_|]'
+
+help() {
+  echo "Usage: cbupl [options..] <file/url>"
+  echo " -t, --time <1h/12h/24h/72h>  File deletion timeout (for litterbox)"
+  echo " -u, --url  Provide an url instead of a local file"
+  echo " -h, --help   Show this help"
+  exit
+}
+
+POSITIONAL_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -t|--time)
+      TIME="$2"
+      SERVER="$LTRBOX_API"
+      shift
+      shift
+      ;;
+    -u|--url)
+      URL=1
+      shift
+      ;;
+    -h|--help)
+      help
+      ;;
+    -*|--*)
+      echo "ERROR: Unknown option $1"
+      exit 1
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+if [[ -z $1 ]]; then
+  echo "ERROR: No file/url provided"
+  exit 2
+fi
+
+if [[ -n $URL ]]; then
+  if ! [[ $1 =~ $URL_REGEX ]]; then
+    echo "ERROR: Invalid URL provided"
+    exit 3
+  fi
+  curl -F "reqtype=fileupload" -F "fileToUpload=$1" "$SERVER"
+else
+  curl -F "reqtype=fileupload" -F "fileToUpload=@$1" "$SERVER"
+fi

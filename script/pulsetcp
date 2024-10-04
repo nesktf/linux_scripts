@@ -1,0 +1,37 @@
+#!/bin/bash
+
+base="default-server="
+file="$HOME/.config/pulse/client.conf"
+
+declare -A avail=([motog]="${base}tcp:192.168.0.103")
+
+help() {
+  echo "Bind (or unbind) to a pulse server via TCP"
+  echo "Available arguments:"
+  for i in ${!avail[@]}; do
+    printf "  - %s\n" ${i}
+  done
+  echo "(Invalid arguments will unbind the client)"
+}
+
+if [ -z ${1} ]; then
+  sel=""
+elif [[ ${1} == "-h" || ${1} == "--help" ]]; then
+  help
+  exit 0
+else
+  sel=${avail[${1}]}
+fi
+
+echo ${sel} > ${file}
+if [[ ${sel} != "" ]]; then
+  printf "Client config binded to server ${1}\n" ${sel}
+else
+  echo "Client config unbinded"
+fi
+
+pulseaudio -k &>/dev/null
+if [ $? -ne 0 ]; then
+  echo "Pulseaudio restart failed"
+  echo "You may need to stop the server in the other device"
+fi

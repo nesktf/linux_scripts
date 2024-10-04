@@ -1,0 +1,219 @@
+#!/bin/bash
+
+## Vars ##
+unset -v input_path
+unset -v output_path
+unset -v format
+unset -v bitrate
+
+verbose=0
+compress=0
+
+## Format things ##
+declare -a formats=("opus" "wav" "mp3")
+
+opus_enc() {
+  local file="${1}"
+  local raw_name="${file%.*}"
+  opusenc --bitrate ${bitrate} "${file}" "${raw_name}.opus"
+}
+
+wav_enc() {
+  local file="${1}"
+  local raw_name="${file%.*}"
+  ffmpeg -i "${file}" -disposition:v:0 attached_pic -map_metadata 0 "${raw_name}.wav"
+}
+
+mp3_enc() {
+  local file="${1}"
+  local raw_name="${file%.*}"
+  ffmpeg -i "${file}" -c:a libmp3lame -b:a ${bitrate}k -c:v copy -disposition:v:0 attached_pic -map_metadata 0 "${raw_name}.mp3"
+}
+
+convert_file() { 
+  case "${format}" in
+    "opus")
+      opus_enc "${1}"
+      ;;
+    "wav")
+      wav_enc "${1}"
+      ;;
+    "mp3")
+      mp3_enc "${1}"
+      ;;
+  esac
+}
+
+check_format() {
+  for i in ${formats[@]}; do
+    [[ ${i} == ${1} ]] && return 1
+  done
+  return 0
+}
+
+## Utils ##
+show_help() {
+  echo "Usage: muspack -i input -o output [options...]"
+
+  echo -e " -i input-path\tInput folder path"
+
+  echo -e " -o output-path\tOutput folder path"
+
+  echo -e " -f format\tOutput format"
+  echo -e "\t\t  ( default: opus )"
+  echo -e "\t\t  ( available: opus wav mp3 )"
+
+  echo -e " -b bitrate\tOutput bitrate"
+  echo -e "\t\t  ( default: 320 )"
+
+  echo -e " -z\t\tCreate zip output instead of folder"
+  echo -e "\t\t  (appends .zip to output-path)"
+
+  echo -e " -v\t\tEnable verbose messages"
+
+  echo -e " -h\t\tShow this help"
+}
+
+error() {
+  echo -e "\u001b[31;1mERROR:\u001b[0m" ${@}
+}
+
+fatal() {
+  error ${@}
+  exit 1
+}
+
+echov() {
+  [ ${verbose} -eq 1 ] && echo -e $@
+  return 0
+}
+
+parse_args() {
+  local OPTIND
+  local OPTSTRING=":hzvi:o:f:b:"
+  while getopts ${OPTSTRING} opt; do
+    case ${opt} in
+      i)
+        input_path="${OPTARG}"
+        ;;
+      o)
+        output_path="${OPTARG}"
+        ;;
+      f)
+        format="${OPTARG}"
+        ;;
+      b)
+        bitrate="${OPTARG}"
+        ;;
+      z)
+        compress=1
+        ;;
+      v)
+        verbose=1
+        ;;
+      h)
+        show_help
+        exit 0
+        ;;
+      :)
+        error "Option -${OPTARG} requires an argument"
+        show_help
+        exit 1
+        ;;
+      \?)
+        error "Invalid option:" "-${OPTARG}"
+        show_help
+        exit 1
+        ;;
+    esac
+  done
+  shift $(($OPTIND-1))
+
+  # Defaults
+  [ -z ${format} ] && format="opus"
+  [ -z ${bitrate} ] && bitrate=320
+
+  # Error checking
+  [ -z ${input_path} ] && fatal "No input path provided"
+  [ ! -d ${input_path} ] && fatal "Invalid input path"
+  [ -z ${output_path} ] && fatal "No output path provided"
+  check_format ${format} && fatal "Invalid format \"${format}\""
+
+  return 0
+}
+
+
+## Main functions ##
+init() {
+  parse_args ${@}
+  echov "=> Starting music packing with args:"
+  echov "- input-path: ${input_path}"
+  echov "- output-path: ${output_path}"
+  echov "- format: ${format}"
+  echov "- bitrate: ${bitrate}k"
+  echov "- compress: $([ ${compress} -eq 1 ] && echo "true" || echo "false")"
+
+  mkdir -p "${output_path}" && echov "=> Creating output folder \"${output_path}\""
+}
+
+copy_contents() {
+  echo "=> Copying folder contents"
+  find "${input_path}" -type f -regex ".*\(flac\|opus\|ogg\)\|.*cover.*" -print0 |
+    while IFS= read -r -d '' file; do
+      album_name="$(basename "$(dirname "$file")")"
+      mkdir -p "${output_path}/${album_name}"
+      cp "${file}" "${output_path}/${album_name}/"
+      echov "- Copying file: ${file}"
+    done
+}
+
+rename_files() {
+  gen_album_uuid () { printf "%s" $(uuidgen -m -N "${1}" -n @url); }
+  
+  echo "=> Setting UUIDs for each album"
+  find "${output_path}" -type d -print0 |
+    while IFS= read -r -d '' folder; do
+      album_name="$(basename "${folder}")"
+      uuid=$(gen_album_uuid "${album_name}")
+      echov "- Renaming album: "${album_name}" -> ${uuid}"}
+      mv "${folder}" "${output_path}/${uuid}"
+    done
+
+  echo "=> Removing invalid characters from music"
+  find "${output_path}" -type f -print0 |
+    while IFS= read -r -d '' file; do
+      new="$(echo "$file" | perl -pe 's/[^[:ascii:]]/_/g')"
+      echov "- Renaming file: ${file} -> ${new}"
+      mv "${file}" "${new}" &>/dev/null
+    done
+}
+
+convert_output() {
+  echo "=> Converting music files"
+  find "${output_path}" -type f -regex ".*\(flac\|opus\|ogg\)" -print0 |
+    while IFS= read -r -d '' file; do
+      ext="${file##*.}"
+      if [[ "${ext}" == "${format}" ]]; then
+        echo "- File skipped: ${file}"
+        continue
+      fi;
+      echo "- Converting file: ${file}"
+      convert_file "${file}"
+      rm "${file}"
+    done
+  return 0
+}
+
+compress_output() {
+  echo "=> Compressing output folder"
+  return 0
+}
+
+init ${@}
+copy_contents
+rename_files
+convert_output
+if [ ${compress} -eq 1 ]; then
+  compress_output
+fi
+echo "=> Packing complete"

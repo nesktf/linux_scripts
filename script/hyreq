@@ -1,0 +1,119 @@
+#!/bin/bash
+
+unset -v req_type
+unset -v tags
+
+error() {
+  echo -e "\u001b[31;1mERROR:\u001b[0m" ${@}
+}
+
+fatal() {
+  error ${@}
+  exit 1
+}
+
+show_help() {
+  echo "Usage: hyreq [opts...] -t <tags>"
+  echo -e " -t tags\tRequest tags"
+  echo -e " -p\t\tRequest a picture"
+  echo -e " -v\t\tRequest a video"
+  echo -e " -h\t\tShow this help"
+  echo "You have to set the following env vars"
+  echo -e " HYDRUS_SERVER: Hydrus client url"
+  echo -e " HYDRUS_API_KEY: Hydrus client api key"
+}
+
+parse_args() {
+  local OPTIND
+  local OPTSTRING=":hpvt:"
+  while getopts ${OPTSTRING} opt; do
+    case ${opt} in
+      p)
+        req_type=0
+        ;;
+      v)
+        req_type=1
+        ;;
+      t)
+        tags="${OPTARG}"
+        ;;
+      h)
+        show_help
+        exit 0
+        ;;
+      :)
+        error "Option -${OPTARG} requires an argument"
+        show_help
+        exit 1
+        ;;
+      \?)
+        error "Invalid option:" "-${OPTARG}"
+        show_help
+        exit 1
+        ;;
+    esac
+  done
+  shift $(($OPTIND-1))
+
+  [[ -z ${req_type} ]] && \
+    fatal "No request type provided"
+  [[ -z ${tags} ]] && \
+    fatal "No tags provided"
+
+  [[ -z ${HYDRUS_SERVER} ]] && \
+    fatal "HYDRUS_SERVER not set"
+  [[ -z ${HYDRUS_API_KEY} ]] && \
+    fatal "HYDRUS_API_KEY not set"
+
+  return 0
+}
+
+random_hash() {
+  local enc_search="$(jq -rn --arg x "$1" '$x|@uri')"
+  local req="${HYDRUS_SERVER}/get_files/search_files?tags=${enc_search}"
+  req+="&Hydrus-Client-API-Access-Key=${HYDRUS_API_KEY}"
+  req+="&return_hashes=true&return_file_ids=false&file_sort_type=4"
+  printf "%s" "$(curl --silent "$req" | jq '.hashes[0]' | sed 's/\"//g')"  
+}
+
+hash_to_file() {
+  printf "${HYDRUS_SERVER}/get_files/file?hash=%s&Hydrus-Client-API-Access-Key=${HYDRUS_API_KEY}" "$1"
+}
+
+tags_to_json() {
+  local out="["
+  while IFS= read -r tag; do
+    out+="\"${tag}\","
+  done <<< "$(echo ${tags} | tr , "\n")"
+
+  if [[ ${req_type} -eq 1 ]]; then
+    out+="\"system:filetype is video\"]"
+  else
+    out+="\"system:filetype is image\"]"
+  fi
+  printf "${out}" | sed "s/'/\"/g"
+}
+
+
+parse_args "${@}"
+
+json_tags="$(tags_to_json)"
+printf "Searching for: \n%s\n" "${json_tags}"
+
+hash=$(random_hash "${json_tags}")
+if [[ ${hash} == "null" || -z ${hash} ]]; then
+  error "Nothing found!"
+  exit 1
+fi
+
+url="$(hash_to_file ${hash})"
+printf "%s" "${url}" > /tmp/hyreq-lasturl
+
+if [[ ${req_type} -eq 1 ]]; then
+  echo "Found a video!"
+  mpv "${url}"
+else
+  echo "Found a picture!"
+  gwenview "${url}" &>/dev/null & disown
+fi
+

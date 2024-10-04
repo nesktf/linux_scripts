@@ -1,0 +1,191 @@
+#!/bin/bash
+## KDE Plasma workspace manager ##
+
+unset -v pape_path
+
+bismuth_flag=0
+border_flag=0
+screen_flag=0
+sleep_flag=0
+
+osd_flag=0
+kwin_flag=0
+
+error() {
+  echo -e "\u001b[31;1mERROR:\u001b[0m" ${@}
+}
+
+fatal() {
+  error ${@}
+  exit 1
+}
+
+show_help() {
+  echo "Usage: kdeman [opts...]"
+  echo -e " -p path\tSet pape"
+  echo -e " -t\t\tToggle bismuth"
+  echo -e " -b\t\tToggle tiling borders"
+  echo -e " -c\t\tToggle secondary screen"
+  echo -e " -s\t\tToggle screen sleep"
+  echo -e " -o\t\tShow info in plasma osd"
+  echo -e " -h\t\tshow this help"
+}
+
+osd() {
+  if [[ ${osd_flag} -eq 1 ]]; then
+    qdbus org.kde.plasmashell /org/kde/osdService org.kde.osdService.showText "${2}" "${1}"
+  else
+    echo "${1}"
+  fi
+}
+
+kwin_reload() {
+  qdbus org.kde.KWin /KWin org.kde.KWin.reconfigure
+  return 0
+}
+
+parse_args() {
+  local OPTIND
+  local OPTSTRING=":tbochsp:"
+  while getopts ${OPTSTRING} opt; do
+    case ${opt} in
+      t)
+        bismuth_flag=1
+        ;;
+      b)
+        border_flag=1
+        ;;
+      o)
+        osd_flag=1
+        ;;
+      c)
+        screen_flag=1
+        ;;
+      s)
+        sleep_flag=1
+        ;;
+      p)
+        pape_path="${OPTARG}"
+        ;;
+      h)
+        show_help
+        exit 0
+        ;;
+      :)
+        error "Option -${OPTARG} requires an argument"
+        show_help
+        exit 1
+        ;;
+      \?)
+        error "Invalid option:" "-${OPTARG}"
+        show_help
+        exit 1
+        ;;
+    esac
+  done
+  shift $(($OPTIND-1))
+  return 0
+}
+
+toggle_bismuth() {
+  local enabled="$(kreadconfig5 --file kwinrc --group Plugins --key bismuthEnabled)"
+
+  if [[ ${enabled} == "true" ]]; then
+    kwriteconfig5 --file kwinrc --group Plugins --key bismuthEnabled false
+    kwriteconfig5 --file kwinrc --group Windows --key ActiveMouseScreen --delete
+    osd "Bismuth Disabled" "bismuth"
+  else
+    kwriteconfig5 --file kwinrc --group Plugins --key bismuthEnabled true
+    kwriteconfig5 --file kwinrc --group Windows --key ActiveMouseScreen false
+    osd "Bismuth enabled" "bismuth"
+  fi
+
+  kwin_flag=1
+}
+
+toggle_borders() {
+  local curr="$(kreadconfig5 --file sierrabreezeenhancedrc --group Windeco --key HideTitleBar)"
+
+  if [[ ${curr} == "MaximizedWindows" ]]; then
+    kwriteconfig5 --file sierrabreezeenhancedrc --group Windeco --key HideTitleBar "Always"
+    # kwriteconfig5 --file kwinrc --group org.kde.kdecoration2 --key BorderSize "NoSides"
+    kwriteconfig5 --file kwinrc --group org.kde.kdecoration2 --key BorderSize "Tiny"
+    plasma-apply-colorscheme "MateriaDarkTiling" &>/dev/null
+    osd "Tiling Borders" "bismuth-tile"
+  else
+    kwriteconfig5 --file sierrabreezeenhancedrc --group Windeco --key HideTitleBar "MaximizedWindows"
+    kwriteconfig5 --file kwinrc --group org.kde.kdecoration2 --key BorderSize "NoSides"
+    plasma-apply-colorscheme "MateriaDark" &>/dev/null
+    osd "Floating Borders" "bismuth-floating"
+  fi
+
+  kwin_flag=1
+}
+
+toggle_screen() {
+  # if [[ "$XDG_SESSION_TYPE" == "wayland" ]];
+  # then
+  #   if [[ "$(kscreen-doctor -j | jq '.outputs[1].enabled')" == "false" ]];
+  #   then
+  #     # kscreen-doctor output.2.enable output.2.position.1920,156 output.2.mode.1
+  #     kscreen-doctor output.2.enable output.2.position.1920,28 output.2.mode.1
+  #   else
+  #     kscreen-doctor output.2.disable
+  #   fi
+  # else
+
+  if [[ $(xrandr --listmonitors | wc -l) -eq "3" ]]; then
+    xrandr --output DisplayPort-0 --off
+    osd "Secondary display disabled" "display-simbolic"
+  else
+    # xrandr --output DisplayPort-0 --mode 1024x768 --pos 1920x156 --rotate normal
+    xrandr --output DisplayPort-0 --mode 1280x1024 --pos 1920x28 --rotate normal
+    osd "Secondary display enabled" "display-simbolic"
+  fi
+}
+
+toggle_sleep() {
+  # local lock=$(kreadconfig5 --file kscreenlockerrc --group Daemon --key Autolock)
+  local lock=$(kreadconfig5 --file powermanagementprofilesrc --group AC --group DPMSControl --key idleTime)
+
+  if [[ -z ${lock} ]]; then
+    # kwriteconfig5 --file kscreenlockerrc --group Daemon --key Autolock true
+    kwriteconfig5 --file powermanagementprofilesrc --group AC --group DPMSControl --key idleTime 300
+    osd "Screen sleep enabled" "object-locked"
+  else
+    # kwriteconfig5 --file kscreenlockerrc --group Daemon --key Autolock false
+    kwriteconfig5 --file powermanagementprofilesrc --group AC --group DPMSControl --key idleTime --delete
+    osd "Screen sleep disabled" "object-unlocked"
+  fi
+
+  qdbus org.freedesktop.ScreenSaver /ScreenSaver configure
+  # qdbus org.freedesktop.PowerManagement /org/kde/Solid/PowerManagement org.kde.Solid.PowerManagement.reparseConfiguration
+  qdbus org.freedesktop.PowerManagement /org/kde/Solid/PowerManagement org.kde.Solid.PowerManagement.refreshStatus
+}
+
+set_pape() {
+  dbus-send --session --dest=org.kde.plasmashell --type=method_call /PlasmaShell org.kde.PlasmaShell.evaluateScript "string:
+  var Desktops = desktops();
+  for (i=0;i<Desktops.length;i++) {
+      d = Desktops[i];
+      d.wallpaperPlugin = 'org.kde.image';
+      d.currentConfigGroup = Array('Wallpaper',
+                    'org.kde.image',
+                    'General');
+      d.writeConfig('Image', '$(readlink -f "$1")');
+  }"
+  osd "Pape set" ""
+}
+
+parse_args ${@}
+
+[[ ${bismuth_flag} -eq 1 ]] && toggle_bismuth
+[[ ${border_flag} -eq 1 ]] && toggle_borders
+[[ ${kwin_flag} -eq 1 ]] && kwin_reload
+
+[[ ${screen_flag} -eq 1 ]] && toggle_screen
+[[ ${sleep_flag} -eq 1 ]] && toggle_sleep
+
+[[ -n ${pape_path} ]] && set_pape "${pape_path}"
+
+exit 0

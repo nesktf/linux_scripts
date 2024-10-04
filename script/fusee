@@ -1,0 +1,33 @@
+#!/bin/bash
+fusee_files="/sdr/projects/dev/local/linux_scripts/common"
+
+case $1 in
+  "--update")
+    temp="$fusee_files/.tmp"
+    mkdir -p "$temp"
+    wget -P "$temp" \
+	    "https://github.com/$(curl -L -s "https://github.com/CTCaer/hekate/releases/latest" | grep -oP '/CTCaer[^"]*.(?<=hekate_ctcaer).+?(?=")')"
+    
+    [[ $? != 0 ]] \
+	&& echo "ERROR: Failed to download update, can't connecto to github" \
+	&& exit 1
+        
+    pushd "$temp" &>/dev/null
+    unzip *.zip
+    mv *.bin "$fusee_files/reboot_payload.bin"
+    popd &>/dev/null
+    rm -rf "$temp"
+    echo ""; echo "Payload updated to Hekate $(curl -s "https://github.com/CTCaer/hekate/releases/latest" | grep -oP 'v[^"]*.+(?=")')"
+    ;;
+  *)
+    payload="$fusee_files/reboot_payload.bin"
+    launch=$($fusee_files/fusee-launcher.py "$payload")
+    
+    [[ "$launch" == "No TegraRCM device found?" ]] \
+	    && echo "ERROR: No device found" \
+	    && exit 1
+
+    echo "Payload sent"
+    ;;
+esac
+
